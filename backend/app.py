@@ -2,8 +2,9 @@ import json
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union, List
 
+import logging
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +12,14 @@ from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
+# Load env from repo root and backend folder, in that order
+# _ENV_ROOT = Path(__file__).resolve().parent.parent / ".env"
+# _ENV_BACKEND = Path(__file__).resolve().parent / ".env"
 load_dotenv()
+
+
+logger = logging.getLogger("app")
+logging.basicConfig(level=logging.INFO)
 
 
 class ModeEnum(str, Enum):
@@ -45,34 +53,10 @@ def get_client() -> OpenAI:
     return OpenAI(api_key=api_key)
 
 
-def build_messages(req: RunRequest) -> List[Dict[str, str]]:
-    system_instructions = "You are a careful assistant. Follow the requested mode exactly."
-    user_prompt = ""
-
-    if req.mode == ModeEnum.summarize:
-        user_prompt = (
-            "Summarize the following text clearly and concisely. Focus on the key points.\n\n" + req.text
-        )
-    elif req.mode == ModeEnum.rephrase:
-        tone_text = req.tone.value if req.tone else "neutral"
-        user_prompt = (
-            f"Rephrase the following text in a {tone_text} tone. Keep meaning faithful; improve clarity.\n\n" + req.text
-        )
-    elif req.mode == ModeEnum.extract_json:
-        user_prompt = (
-            "Extract structured data as a JSON object from the following text. "
-            "Return ONLY valid JSON with double-quoted keys/strings, no code fences.\n\n" + req.text
-        )
-    elif req.mode == ModeEnum.classify:
-        user_prompt = (
-            "Determine the overall sentiment (positive, neutral, or negative) of the following text. "
-            "Reply with a short sentence naming the sentiment.\n\n" + req.text
-        )
-
-    return [
-        {"role": "system", "content": system_instructions},
-        {"role": "user", "content": user_prompt},
-    ]
+def _mode_params(mode: ModeEnum) -> Dict[str, Optional[float]]:
+    if mode == ModeEnum.extract_json:
+        return {"temperature": 0.0}
+    return {"temperature": 0.2}
 
 
 def _get_prompt_id_for_mode(mode: ModeEnum) -> Optional[str]:
@@ -103,75 +87,64 @@ def call_openai(req: RunRequest) -> Dict[str, Any]:
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     prompt_id = _get_prompt_id_for_mode(req.mode)
-    if prompt_id:
+    if not prompt_id:
+        raise HTTPException(status_code=500, detail="Server misconfiguration: Prompt ID not set for this mode.")
+
+    # Inputs: system prompt comes from Prompt Studio (prompt_id). User prompt is req.text
+    input_vars: Dict[str, Any] = {"user_prompt": req.text, "text": req.text}
+    if req.mode == ModeEnum.rephrase and req.tone:
+        input_vars["tone"] = req.tone.value
+
+    params = _mode_params(req.mode)
+    try:
+        # Call using the saved Prompt ID via the 'prompt' parameter
         try:
             resp = client.responses.create(
                 model=model,
-                prompt_id=prompt_id,
-                input={
-                    "mode": req.mode.value,
-                    "text": req.text,
-                    "tone": req.tone.value if req.tone else None,
-                },
-                temperature=0.0 if req.mode == ModeEnum.extract_json else 0.2,
-                response_format={"type": "json_object"} if req.mode == ModeEnum.extract_json else None,
+                prompt={"id": prompt_id},
+                input=input_vars,
+                # temperature=params["temperature"],  # type: ignore[index]
             )
+        except Exception as e_primary:
+            logger.info("Prompt call with dict inputs failed; retrying with raw text input. Error: %s", e_primary)
+            # Retry with raw string input (binds to the prompt's default variable)
+            resp = client.responses.create(
+                model=model,
+                prompt={"id": prompt_id},
+                input=req.text,
+                # temperature=params["temperature"],  # type: ignore[index]
+            )
+    except Exception as e:
+        # Log detailed error server-side, but return a friendly message
+        logger.exception("OpenAI Responses API call failed: %s", e)
+        status = getattr(e, "status_code", None)
+        try:
+            status = int(status) if status is not None else 502
         except Exception:
-            # Fall back to inline prompt if prompt call fails
-            prompt_id = None
-        else:
-            # Extract text content
-            content_text = getattr(resp, "output_text", None)
-            if content_text is None:
-                # Best-effort fallback to raw structure
-                try:
-                    content_text = json.dumps(resp.dict())
-                except Exception:
-                    content_text = ""
+            status = 502
+        message = getattr(e, "message", None) or str(e) or "Upstream AI service error. Please try again."
+        # Lightweight sanitization
+        if "api_key" in message.lower():
+            message = "Authentication with upstream AI failed. Check API key."
+        raise HTTPException(status_code=status, detail=message)
 
-            usage_dict = _coerce_usage(getattr(resp, "usage", None))
+    content_text = getattr(resp, "output_text", None)
+    if content_text is None:
+        try:
+            content_text = json.dumps(resp.dict())
+        except Exception:
+            content_text = ""
 
-            if req.mode == ModeEnum.extract_json:
-                try:
-                    parsed = json.loads(content_text)
-                    result: Union[str, Dict[str, Any], List[Any]] = parsed
-                except Exception:
-                    result = content_text
-            else:
-                result = content_text
-
-            return {"result": result, "usage": usage_dict}
-
-    # Fallback: inline messages via Chat Completions
-    messages = build_messages(req)
-    try:
-        if req.mode == ModeEnum.extract_json:
-            completion = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=0.0,
-                response_format={"type": "json_object"},
-            )
-        else:
-            completion = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=0.2,
-            )
-    except Exception:
-        raise HTTPException(status_code=502, detail="Upstream AI service error. Please try again.")
-
-    content = completion.choices[0].message.content if completion.choices else ""
-    usage_dict = _coerce_usage(getattr(completion, "usage", None))
+    usage_dict = _coerce_usage(getattr(resp, "usage", None))
 
     if req.mode == ModeEnum.extract_json:
         try:
-            parsed = json.loads(content)
-            result = parsed
+            parsed = json.loads(content_text)
+            result: Union[str, Dict[str, Any], Any] = parsed
         except Exception:
-            result = content
+            result = content_text
     else:
-        result = content
+        result = content_text
 
     return {"result": result, "usage": usage_dict}
 
