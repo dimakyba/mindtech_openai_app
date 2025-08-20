@@ -116,9 +116,11 @@ def call_openai(req: RunRequest) -> Dict[str, Any]:
     if not prompt_id:
         raise HTTPException(status_code=500, detail="Server misconfiguration: Prompt ID not set for this mode.")
 
-    input_vars: Dict[str, Any] = {"user_prompt": req.text, "text": req.text}
+    content_parts: List[Dict[str, Any]] = [
+        {"type": "input_text", "text": req.text}
+    ]
     if req.mode == ModeEnum.rephrase and req.tone:
-        input_vars["tone"] = req.tone.value
+        content_parts.append({"type": "input_text", "text": f"tone: {req.tone.value}"})
 
     params = _mode_params(req.mode)
     try:
@@ -126,7 +128,8 @@ def call_openai(req: RunRequest) -> Dict[str, Any]:
             resp = client.responses.create(
                 model=model,
                 prompt={"id": prompt_id},
-                input=input_vars,
+                input=[{"role": "user", "content": content_parts}],
+                **params,
             )
         except Exception as e_primary:
             logger.info("Prompt call with dict inputs failed; retrying with raw text input. Error: %s", e_primary)
@@ -134,6 +137,7 @@ def call_openai(req: RunRequest) -> Dict[str, Any]:
                 model=model,
                 prompt={"id": prompt_id},
                 input=req.text,
+                **params,
             )
     except Exception as e:
         logger.exception("OpenAI Responses API call failed: %s", e)
