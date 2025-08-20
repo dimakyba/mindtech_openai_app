@@ -24,3 +24,16 @@ body {
   background-size: 1rem 1rem;
   padding-right: 2.5rem;
 }
+
+/* Monospace + JSON token colors */
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.json .json-key { color: #93c5fd; }      /* light blue */
+.json .json-string { color: #86efac; }   /* green */
+.json .json-number { color: #fdba74; }   /* orange */
+.json .json-boolean { color: #fcd34d; }  /* amber */
+.json .json-null { color: #c4b5fd; }     /* violet */

@@ -28,7 +28,31 @@ function App() {
   const overLimit = len > max
   const valid = len >= 1 && !overLimit && !(mode === 'rephrase' && !tone)
   const showTone = mode === 'rephrase'
-  const resultClass = useMemo(() => (isJsonRendered ? 'mono' : ''), [isJsonRendered])
+  const resultClass = useMemo(() => (isJsonRendered ? 'mono json' : ''), [isJsonRendered])
+
+  const syntaxHighlight = (json) => {
+    if (!json) return ''
+    let s = json
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+    return s.replace(/("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"\s*:)|("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*")|(\btrue\b|\bfalse\b)|(\bnull\b)|(-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+      (match, key) => {
+        let cls = ''
+        if (key) {
+          cls = 'json-key'
+        } else if (/^"/.test(match)) {
+          cls = 'json-string'
+        } else if (/true|false/.test(match)) {
+          cls = 'json-boolean'
+        } else if (/null/.test(match)) {
+          cls = 'json-null'
+        } else {
+          cls = 'json-number'
+        }
+        return `<span class="${cls}">${match}</span>`
+      })
+  }
 
   const onSubmit = async (e) => {
     e.preventDefault()
@@ -187,7 +211,11 @@ function App() {
                 Copy
               </button>
             </div>
-            <pre id="result" className={`${resultClass} p-4 whitespace-pre-wrap break-words`}>{result}</pre>
+            {isJsonRendered ? (
+              <pre id="result" className={`${resultClass} p-4 whitespace-pre-wrap break-words`} dangerouslySetInnerHTML={{ __html: syntaxHighlight(result) }} />
+            ) : (
+              <pre id="result" className={`${resultClass} p-4 whitespace-pre-wrap break-words`}>{result}</pre>
+            )}
           </div>
         )}
       </div>
