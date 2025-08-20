@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MindTech Text Ops</title>
+    <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+    <div id="usage-floating" class="usage-floating" style="display:none;">
+        <div class="usage-row"><span class="k">Prompt</span><span id="usage-prompt">0</span></div>
+        <div class="usage-row"><span class="k">Completion</span><span id="usage-completion">0</span></div>
+        <div class="usage-row"><span class="k">Total</span><span id="usage-total">0</span></div>
+    </div>
+    <div class="container">
+        <h1>Text Operations</h1>
+
+        <form id="text-form">
+            <label for="text">Text (1–5000 chars)</label>
+            <textarea id="text" name="text" minlength="1" maxlength="5000" required placeholder="Paste text here..."></textarea>
+            <div id="text-help" class="help">0 / 5000</div>
+
+            <div class="row">
+                <div class="field">
+                    <label for="mode">Mode</label>
+                    <select id="mode" name="mode" required>
+                        <option value="summarize">Summarize</option>
+                        <option value="rephrase">Rephrase</option>
+                        <option value="extract_json">Extract JSON</option>
+                        <option value="classify">Classify sentiment</option>
+                    </select>
+                </div>
+
+                <div class="field" id="tone-field" style="display:none;">
+                    <label for="tone">Tone</label>
+                    <select id="tone" name="tone">
+                        <option value="casual">Casual</option>
+                        <option value="professional">Professional</option>
+                        <option value="friendly">Friendly</option>
+                    </select>
+                </div>
+            </div>
+
+            <button type="submit" id="submit-btn">Run</button>
+        </form>
+
+        <div id="error" class="error" role="alert" style="display:none;"></div>
+
+        <div id="result-panel" class="panel" style="display:none;">
+            <div class="panel-header">
+                <h2>Result</h2>
+                <button id="copy-btn" title="Copy result">Copy</button>
+            </div>
+            <pre id="result"></pre>
+        </div>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>
