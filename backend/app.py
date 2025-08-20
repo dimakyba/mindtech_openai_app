@@ -6,15 +6,14 @@ from typing import Any, Dict, Optional, Union, List
 
 import logging
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+import time
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
-# Load env from repo root and backend folder, in that order
-# _ENV_ROOT = Path(__file__).resolve().parent.parent / ".env"
-# _ENV_BACKEND = Path(__file__).resolve().parent / ".env"
+
 load_dotenv()
 
 
@@ -72,14 +71,41 @@ def _get_prompt_id_for_mode(mode: ModeEnum) -> Optional[str]:
 
 
 def _coerce_usage(obj: Any) -> Dict[str, int]:
-    try:
-        return {
-            "prompt_tokens": int(getattr(obj, "prompt_tokens", 0) or 0),
-            "completion_tokens": int(getattr(obj, "completion_tokens", 0) or 0),
-            "total_tokens": int(getattr(obj, "total_tokens", 0) or 0),
-        }
-    except Exception:
+    if not obj:
         return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+    def _from_attr_or_key(o: Any, key: str) -> Optional[int]:
+        try:
+            v = getattr(o, key)
+            if isinstance(v, (int, float)):
+                return int(v)
+        except Exception:
+            pass
+        if isinstance(o, dict):
+            v = o.get(key)
+            if isinstance(v, (int, float)):
+                return int(v)
+        return None
+
+    def _first_of(o: Any, keys: List[str]) -> Optional[int]:
+        for k in keys:
+            v = _from_attr_or_key(o, k)
+            if v is not None:
+                return v
+        return None
+
+    prompt_tokens = _first_of(obj, ["prompt_tokens", "input_tokens", "input_token_count"])
+    completion_tokens = _first_of(obj, ["completion_tokens", "output_tokens", "output_token_count"])
+    total_tokens = _first_of(obj, ["total_tokens", "token_count"])  # some SDKs expose only total
+
+    if total_tokens is None and (prompt_tokens is not None or completion_tokens is not None):
+        total_tokens = (prompt_tokens or 0) + (completion_tokens or 0)
+
+    return {
+        "prompt_tokens": prompt_tokens or 0,
+        "completion_tokens": completion_tokens or 0,
+        "total_tokens": total_tokens or 0,
+    }
 
 
 def call_openai(req: RunRequest) -> Dict[str, Any]:
@@ -90,32 +116,26 @@ def call_openai(req: RunRequest) -> Dict[str, Any]:
     if not prompt_id:
         raise HTTPException(status_code=500, detail="Server misconfiguration: Prompt ID not set for this mode.")
 
-    # Inputs: system prompt comes from Prompt Studio (prompt_id). User prompt is req.text
     input_vars: Dict[str, Any] = {"user_prompt": req.text, "text": req.text}
     if req.mode == ModeEnum.rephrase and req.tone:
         input_vars["tone"] = req.tone.value
 
     params = _mode_params(req.mode)
     try:
-        # Call using the saved Prompt ID via the 'prompt' parameter
         try:
             resp = client.responses.create(
                 model=model,
                 prompt={"id": prompt_id},
                 input=input_vars,
-                # temperature=params["temperature"],  # type: ignore[index]
             )
         except Exception as e_primary:
             logger.info("Prompt call with dict inputs failed; retrying with raw text input. Error: %s", e_primary)
-            # Retry with raw string input (binds to the prompt's default variable)
             resp = client.responses.create(
                 model=model,
                 prompt={"id": prompt_id},
                 input=req.text,
-                # temperature=params["temperature"],  # type: ignore[index]
             )
     except Exception as e:
-        # Log detailed error server-side, but return a friendly message
         logger.exception("OpenAI Responses API call failed: %s", e)
         status = getattr(e, "status_code", None)
         try:
@@ -123,7 +143,6 @@ def call_openai(req: RunRequest) -> Dict[str, Any]:
         except Exception:
             status = 502
         message = getattr(e, "message", None) or str(e) or "Upstream AI service error. Please try again."
-        # Lightweight sanitization
         if "api_key" in message.lower():
             message = "Authentication with upstream AI failed. Check API key."
         raise HTTPException(status_code=status, detail=message)
@@ -160,10 +179,40 @@ app.add_middleware(
 )
 
 
+RATE_BUCKETS: Dict[str, List[float]] = {}
+
+
+def _client_key(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for") or request.client.host if request.client else "unknown"
+    return (xff.split(",")[0] if xff else "unknown").strip()
+
+
+def _rate_limit_or_raise(request: Request) -> None:
+    limit = int(os.getenv("RATE_LIMIT_REQUESTS", "20"))
+    window_sec = int(os.getenv("RATE_LIMIT_WINDOW_SEC", "60"))
+    if limit <= 0 or window_sec <= 0:
+        return
+
+    key = _client_key(request)
+    now = time.time()
+    window_start = now - window_sec
+
+    timestamps = RATE_BUCKETS.get(key, [])
+    timestamps = [t for t in timestamps if t >= window_start]
+    if len(timestamps) >= limit:
+        oldest = min(timestamps)
+        remaining = window_sec - int(now - oldest)
+        headers = {"Retry-After": str(max(1, remaining))}
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Please try again later.", headers=headers)
+    timestamps.append(now)
+    RATE_BUCKETS[key] = timestamps
+
+
 @app.post("/api/run", response_model=RunResponse)
-async def run(req: RunRequest) -> RunResponse:
+async def run(req: RunRequest, request: Request) -> RunResponse:
+    _rate_limit_or_raise(request)
     if req.mode == ModeEnum.rephrase and not req.tone:
-        raise HTTPException(status_code=422, detail="Tone is required when mode = rephrase.")
+        raise HTTPException(status_code=400, detail="Tone is required when mode = rephrase.")
 
     try:
         payload = call_openai(req)
@@ -174,13 +223,11 @@ async def run(req: RunRequest) -> RunResponse:
         raise HTTPException(status_code=500, detail="Unexpected server error. Please try again.")
 
 
-# Health check
 @app.get("/health")
 async def health():
     return {"ok": True}
 
 
-# Static frontend (serve ../frontend)
 FRONTEND_DIR = str(Path(__file__).resolve().parent.parent / "frontend")
 if os.path.isdir(FRONTEND_DIR):
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
