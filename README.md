@@ -158,10 +158,14 @@ __sample prompts are in `sample.txt`__
 
 ## Screenshots
 
-UI:
+__UI__:
 
 ![UI](screenshot_ui.png)
 
-JSON:
+__JSON__:
 
 ![JSON](screenshot_json.png)
+
+__Rephrase__:
+
+![Rephrase](screenshot_rephrase.png)

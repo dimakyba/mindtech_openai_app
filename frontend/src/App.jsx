@@ -119,17 +119,17 @@ function App() {
 
   return (
     <>
-      {/* Usage floating */}
-      {result && (
-        <div className="fixed top-4 right-4 bg-card/90 border border-border rounded-xl px-3 py-2 shadow-glass min-w-40">
-          <div className="flex items-center justify-between gap-3 text-sm"><span className="text-muted">Prompt</span><span>{usage.prompt_tokens}</span></div>
-          <div className="flex items-center justify-between gap-3 text-sm mt-1"><span className="text-muted">Completion</span><span>{usage.completion_tokens}</span></div>
-          <div className="flex items-center justify-between gap-3 text-sm mt-1"><span className="text-muted">Total</span><span>{usage.total_tokens}</span></div>
-        </div>
-      )}
-
-      <div className="max-w-3xl mx-auto mt-10 mb-10 p-6 bg-card/60 border border-border rounded-2xl backdrop-blur-xs shadow-glass flex flex-col overflow-hidden max-h-[calc(100vh-5rem)]">
+      <div className="relative max-w-3xl mx-auto mt-10 mb-10 p-6 bg-card/60 border border-border rounded-2xl backdrop-blur-xs shadow-glass flex flex-col overflow-hidden max-h-[calc(100vh-5rem)]">
         <h1 className="text-2xl font-semibold mb-4">MindTech OpenAI Integration App</h1>
+
+        {/* Usage text in the card's top-right (no cloud) */}
+        {result && (
+          <div className="absolute top-4 right-4 text-xs sm:text-sm text-muted text-right leading-5">
+            <div>Prompt {usage.prompt_tokens}</div>
+            <div>Completion {usage.completion_tokens}</div>
+            <div>Total {usage.total_tokens}</div>
+          </div>
+        )}
 
         <form onSubmit={onSubmit} className="space-y-3">
           <div>
