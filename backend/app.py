@@ -221,13 +221,3 @@ async def run(req: RunRequest, request: Request) -> RunResponse:
         raise
     except Exception:
         raise HTTPException(status_code=500, detail="Unexpected server error. Please try again.")
-
-
-@app.get("/health")
-async def health():
-    return {"ok": True}
-
-
-FRONTEND_DIR = str(Path(__file__).resolve().parent.parent / "frontend")
-if os.path.isdir(FRONTEND_DIR):
-    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
